@@ -1,0 +1,25 @@
+services:
+  bot:
+    build: .
+    container_name: olx-iphone-bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      # Override the host default so the path points at the volume.
+      DB_PATH: /app/data/bot.db
+    volumes:
+      - ./data:/app/data
+    # Single process by design (ARCHITECTURE.md §8) — do not scale this
+    # service; two replicas would double-scrape and double-notify.
+    # `container_name` above is what actually enforces this under plain
+    # `docker compose` (Compose requires unique container names, so
+    # `--scale bot=2` fails outright); `deploy.replicas` only has teeth
+    # under Swarm, but is left as explicit documentation of intent.
+    deploy:
+      replicas: 1
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

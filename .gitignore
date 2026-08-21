@@ -1,0 +1,21 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+data/
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+.pytest_cache/
+.ruff_cache/
+.coverage
+
+# Claude Code local settings (personal permission cache, not project config)
+.claude/settings.local.json
+
+# editor/OS junk
+.vscode/
+.idea/
+.DS_Store
