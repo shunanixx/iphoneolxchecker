@@ -109,24 +109,90 @@ async def show_photos(callback: CallbackQuery, i18n: Translator) -> None:
         return
 
     await callback.answer()
-
-    media = [InputMediaPhoto(media=url) for url in photos[:MAX_MEDIA_GROUP]]
-    media[0].caption = render_photo_caption(listing, i18n)
+    caption = render_photo_caption(listing, i18n)
+    keyboard = listing_subview(i18n, listing.id, listing.url)
 
     try:
+        if len(photos) == 1:
+            # Telegram's sendMediaGroup rejects groups with fewer than 2
+            # items outright — a single-photo listing (common; many OLX
+            # sellers upload just one) has to go through answer_photo
+            # instead, or the button silently "does nothing" every time.
+            # Unlike a media group, a single sendPhoto *can* carry the
+            # back button directly, so no follow-up message is needed.
+            await callback.message.answer_photo(photos[0], caption=caption, reply_markup=keyboard)
+            return
+        # InputMediaPhoto is a frozen pydantic model in current aiogram —
+        # the caption has to be set at construction time, not assigned
+        # afterward (that raises pydantic's ValidationError, which isn't
+        # a TelegramBadRequest and was crashing this handler outright for
+        # every listing with 2+ photos).
+        media = [
+            InputMediaPhoto(media=url, caption=caption if index == 0 else None)
+            for index, url in enumerate(photos[:MAX_MEDIA_GROUP])
+        ]
         await callback.message.answer_media_group(media=media)
     except TelegramBadRequest as exc:
         # OLX CDN links occasionally 403 for Telegram's fetcher.
-        log.warning("media group failed for listing %s: %s", listing.id, exc)
+        log.warning("photo(s) failed for listing %s: %s", listing.id, exc)
         await callback.message.answer(i18n("error.generic"))
         return
 
     # A media group can't carry an inline keyboard, so the way back is a
     # follow-up message — still just `lst:{id}:back`.
-    await callback.message.answer(
-        render_photo_caption(listing, i18n),
-        reply_markup=listing_subview(i18n, listing.id, listing.url),
-    )
+    await callback.message.answer(render_photo_caption(listing, i18n), reply_markup=keyboard)
+
+
+async def _resolve_seller_reviews(olx: OLXClient, listing: Listing) -> dict | None:
+    """Cache lookup, then a live fetch — self-healing a stale profile URL.
+
+    `seller_profile_url` is captured once, at ingestion time. OLX has
+    changed how that URL is built before (the old scheme 404s outright —
+    see parser.py's `_seller_profile_url_from_dom`), so any listing
+    ingested before that fix still carries the broken one forever unless
+    something re-resolves it. Rather than a one-off bulk migration, this
+    repairs itself the first time a user actually asks to see reviews
+    for that listing: on a fetch failure, re-fetch the listing's own
+    detail page (which re-derives the URL fresh from the current page
+    markup) and retry once with whatever it finds.
+    """
+    if not listing.seller_profile_url:
+        return None
+
+    async with session_scope() as session:
+        cached = await crud.get_seller_reviews(session, listing.seller_profile_url)
+    if cached is not None:
+        return cached
+
+    url = listing.seller_profile_url
+    try:
+        reviews = await olx.fetch_seller_reviews(url)
+    except (BlockedError, FetchError) as exc:
+        log.info("seller reviews fetch failed for %s, trying to refresh the URL: %s", url, exc)
+        try:
+            detail = await olx.fetch_detail(listing.url)
+        except (BlockedError, FetchError):
+            detail = None
+
+        fresh_url = detail.seller_profile_url if detail else None
+        if not fresh_url or fresh_url == url:
+            return None
+
+        try:
+            reviews = await olx.fetch_seller_reviews(fresh_url)
+        except (BlockedError, FetchError) as exc2:
+            log.debug("refreshed seller URL still failed for %s: %s", fresh_url, exc2)
+            return None
+
+        async with session_scope() as session:
+            stored = await crud.get_listing(session, listing.id)
+            if stored is not None:
+                stored.seller_profile_url = fresh_url
+        url = fresh_url
+
+    async with session_scope() as session:
+        await crud.save_seller_reviews(session, url, reviews)
+    return reviews
 
 
 @router.callback_query(F.data.startswith("lst:"), F.data.endswith(":reviews"))
@@ -140,22 +206,17 @@ async def show_reviews(callback: CallbackQuery, i18n: Translator, olx: OLXClient
 
     if listing.seller_profile_url:
         async with session_scope() as session:
-            reviews = await crud.get_seller_reviews(session, listing.seller_profile_url)
+            cached = await crud.get_seller_reviews(session, listing.seller_profile_url)
 
-        if reviews is None:
-            # Cache miss (or expired TTL) — fetch once and store, so the
-            # next user viewing this seller pays nothing. Acknowledge the
-            # callback first: the fetch can outlast Telegram's timeout.
+        if cached is not None:
+            reviews = cached
+        else:
+            # Cache miss (or a stale/broken URL needing a self-heal
+            # fetch) — acknowledge first, since either can outlast
+            # Telegram's callback timeout.
             await callback.answer()
             answered = True
-            try:
-                reviews = await olx.fetch_seller_reviews(listing.seller_profile_url)
-            except (BlockedError, FetchError) as exc:
-                log.debug("live reviews fetch failed: %s", exc)
-                reviews = None
-            else:
-                async with session_scope() as session:
-                    await crud.save_seller_reviews(session, listing.seller_profile_url, reviews)
+            reviews = await _resolve_seller_reviews(olx, listing)
 
     await safe_edit(
         callback.message,

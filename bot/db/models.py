@@ -111,7 +111,11 @@ class Analysis(Base):
     #: Must equal listings.content_hash for this row to be a cache hit.
     content_hash: Mapped[str] = mapped_column(String(64), index=True)
 
-    score: Mapped[int] = mapped_column(Integer)
+    #: Device deal quality (price/condition) and seller trustworthiness
+    #: are scored independently — see ai/prompts.py for why they are two
+    #: numbers rather than one blended score.
+    phone_score: Mapped[int] = mapped_column(Integer)
+    seller_score: Mapped[int] = mapped_column(Integer)
     short_verdict: Mapped[str] = mapped_column(Text)
     price_assessment: Mapped[str | None] = mapped_column(Text)
     condition_assessment: Mapped[str | None] = mapped_column(Text)

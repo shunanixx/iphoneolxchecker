@@ -6,8 +6,10 @@ import pytest
 
 from bot.scraper.parser import (
     compute_content_hash,
+    parse_listing_detail,
     parse_price,
     parse_search_results,
+    parse_seller_reviews,
 )
 
 
@@ -161,3 +163,91 @@ def test_parse_search_results_falls_back_to_dom():
 
 def test_parse_search_results_on_garbage_returns_empty():
     assert parse_search_results("<html><body>blocked</body></html>") == []
+
+
+def _detail_page(ad: dict, seller_link_html: str = "") -> str:
+    blob = json.dumps(json.dumps({"ad": ad}, ensure_ascii=False))
+    return (
+        f"<html><body>{seller_link_html}</body>"
+        f"<script>window.__PRERENDERED_STATE__ = {blob};window.foo=1;</script></html>"
+    )
+
+
+def test_seller_profile_url_comes_from_the_dom_anchor():
+    """The real shape: the state's `user` has no URL field at all — OLX
+    encodes the profile URL as an opaque slug only present in the page
+    markup, behind `data-testid="user-profile-link"`.
+    """
+    ad = {
+        "id": 1,
+        "description": "Продам iPhone",
+        "photos": [],
+        "user": {"id": 958029057, "uuid": "cb320a7b-c192-46a9-80f2-c5746e6bd2e7", "name": "Іван"},
+    }
+    html = _detail_page(
+        ad, '<a data-testid="user-profile-link" href="/uk/list/user/1VqEek/">Іван</a>'
+    )
+
+    detail = parse_listing_detail(html)
+
+    assert detail.seller_profile_url == "https://www.olx.ua/uk/list/user/1VqEek/"
+    assert detail.seller_name == "Іван"
+
+
+def test_seller_profile_url_is_not_guessed_from_user_id():
+    """Regression: the old code built `/uk/list/user/{user.id}/`, which
+    404s on live OLX — a numeric id must never be used as a fallback URL.
+    """
+    ad = {
+        "id": 1,
+        "description": "Продам iPhone",
+        "photos": [],
+        "user": {"id": 958029057, "name": "Іван"},
+    }
+    html = _detail_page(ad)  # no profile-link anchor at all
+
+    detail = parse_listing_detail(html)
+
+    assert detail.seller_profile_url is None
+    assert "958029057" not in (detail.seller_profile_url or "")
+
+
+def _seller_page_state(seller_data: dict) -> str:
+    blob = json.dumps(
+        json.dumps({"userListing": {"seller": {"data": seller_data}}}, ensure_ascii=False)
+    )
+    return (
+        "<html><body></body><script>"
+        f"window.__PRERENDERED_STATE__ = {blob};window.x=1;"
+        "</script></html>"
+    )
+
+
+def test_parse_seller_reviews_matches_the_live_shape():
+    """Real seller pages carry no rating/review-count field at all — that
+    widget loads over a separate request our HTTP client never makes.
+    `created` is the reliable signal that identifies the seller object,
+    confirmed against a live `/uk/list/user/...` page.
+    """
+    html = _seller_page_state(
+        {
+            "id": 29095517,
+            "uuid": "43ed696d-9996-47b3-acdf-0720a2bd155f",
+            "created": "2014-12-12T15:21:49+02:00",
+            "name": "Олена",
+        }
+    )
+
+    reviews = parse_seller_reviews(html)
+
+    assert reviews["since"] == "2014-12-12"
+    assert reviews["rating"] is None
+    assert reviews["reviews_count"] is None
+
+
+def test_parse_seller_reviews_with_no_matching_object_degrades_gracefully():
+    html = "<html><body>no embedded state here</body></html>"
+
+    reviews = parse_seller_reviews(html)
+
+    assert reviews == {"rating": None, "reviews_count": None, "reviews": [], "since": None}

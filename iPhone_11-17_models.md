@@ -1,0 +1,30 @@
+# iPhone 11–17: модели, цвета, память
+
+- **iPhone 11** — Black, White, (PRODUCT)RED, Yellow, Purple, Green · 64/128/256 ГБ
+- **iPhone 11 Pro** — Midnight Green, Gold, Silver, Space Gray · 64/256/512 ГБ
+- **iPhone 11 Pro Max** — Midnight Green, Gold, Silver, Space Gray · 64/256/512 ГБ
+- **iPhone 12 mini** — Black, White, (PRODUCT)RED, Green, Blue, Purple · 64/128/256 ГБ
+- **iPhone 12** — Black, White, (PRODUCT)RED, Green, Blue, Purple · 64/128/256 ГБ
+- **iPhone 12 Pro** — Silver, Graphite, Gold, Pacific Blue · 128/256/512 ГБ
+- **iPhone 12 Pro Max** — Silver, Graphite, Gold, Pacific Blue · 128/256/512 ГБ
+- **iPhone 13 mini** — Pink, Blue, Midnight, Starlight, (PRODUCT)RED, Green · 128/256/512 ГБ
+- **iPhone 13** — Pink, Blue, Midnight, Starlight, (PRODUCT)RED, Green · 128/256/512 ГБ
+- **iPhone 13 Pro** — Graphite, Gold, Silver, Sierra Blue, Alpine Green · 128/256/512 ГБ/1 ТБ
+- **iPhone 13 Pro Max** — Graphite, Gold, Silver, Sierra Blue, Alpine Green · 128/256/512 ГБ/1 ТБ
+- **iPhone 14** — Blue, Purple, Midnight, Starlight, (PRODUCT)RED, Yellow · 128/256/512 ГБ
+- **iPhone 14 Plus** — Blue, Purple, Midnight, Starlight, (PRODUCT)RED, Yellow · 128/256/512 ГБ
+- **iPhone 14 Pro** — Space Black, Silver, Gold, Deep Purple · 128/256/512 ГБ/1 ТБ
+- **iPhone 14 Pro Max** — Space Black, Silver, Gold, Deep Purple · 128/256/512 ГБ/1 ТБ
+- **iPhone 15** — Black, Blue, Green, Yellow, Pink · 128/256/512 ГБ
+- **iPhone 15 Plus** — Black, Blue, Green, Yellow, Pink · 128/256/512 ГБ
+- **iPhone 15 Pro** — Black Titanium, White Titanium, Blue Titanium, Natural Titanium · 128/256/512 ГБ/1 ТБ
+- **iPhone 15 Pro Max** — Black Titanium, White Titanium, Blue Titanium, Natural Titanium · 256/512 ГБ/1 ТБ
+- **iPhone 16** — Black, White, Pink, Teal, Ultramarine · 128/256/512 ГБ
+- **iPhone 16 Plus** — Black, White, Pink, Teal, Ultramarine · 128/256/512 ГБ
+- **iPhone 16e** — Black, White · 128/256/512 ГБ
+- **iPhone 16 Pro** — Black Titanium, White Titanium, Natural Titanium, Desert Titanium · 128/256/512 ГБ/1 ТБ
+- **iPhone 16 Pro Max** — Black Titanium, White Titanium, Natural Titanium, Desert Titanium · 256/512 ГБ/1 ТБ
+- **iPhone 17** — Lavender, Sage, Mist Blue, White, Black · 256/512 ГБ
+- **iPhone Air** — Sky Blue, Light Gold, Cloud White, Space Black · 256/512 ГБ/1 ТБ
+- **iPhone 17 Pro** — Silver, Deep Blue, Cosmic Orange · 256/512 ГБ/1 ТБ
+- **iPhone 17 Pro Max** — Silver, Deep Blue, Cosmic Orange · 256/512 ГБ/1 ТБ/2 ТБ

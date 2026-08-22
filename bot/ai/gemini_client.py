@@ -235,18 +235,23 @@ def _guess_mime(data: bytes) -> str:
     return "image/jpeg"
 
 
+def _clamped_score(payload: dict[str, Any], key: str) -> int:
+    try:
+        score = int(payload.get(key, 0))
+    except (TypeError, ValueError):
+        return 0
+    return max(1, min(10, score)) if score else 0
+
+
 def normalize_analysis(payload: dict[str, Any]) -> dict[str, Any]:
     """Coerce a model response into exactly the shape the DB expects.
 
-    The schema constrains the model, but a clamped score and guaranteed
+    The schema constrains the model, but clamped scores and guaranteed
     string fields mean a surprising response degrades the card rather
     than breaking the handler that renders it.
     """
-    try:
-        score = int(payload.get("score", 0))
-    except (TypeError, ValueError):
-        score = 0
-    score = max(1, min(10, score)) if score else 0
+    phone_score = _clamped_score(payload, "phone_score")
+    seller_score = _clamped_score(payload, "seller_score")
 
     risk_flags = payload.get("risk_flags") or []
     if isinstance(risk_flags, str):
@@ -262,7 +267,8 @@ def normalize_analysis(payload: dict[str, Any]) -> dict[str, Any]:
         verdict = verdict[:297] + "…"
 
     return {
-        "score": score,
+        "phone_score": phone_score,
+        "seller_score": seller_score,
         "short_verdict": verdict,
         "price_assessment": _text("price_assessment"),
         "condition_assessment": _text("condition_assessment"),

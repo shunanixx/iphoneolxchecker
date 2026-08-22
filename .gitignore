@@ -19,3 +19,6 @@ data/
 .vscode/
 .idea/
 .DS_Store
+
+# Internal agent-guidance doc — kept locally, not published
+CLAUDE.md

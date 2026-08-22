@@ -23,10 +23,22 @@ from bot.scraper.detector import (
         ("iPhone 15 ProMax 512GB", "iphone_15_pro_max"),
         ("Продам iPhone 11 в ідеалі", "iphone_11"),
         ("iPhone 17 Pro 1TB", "iphone_17_pro"),
+        ("iPhone 16e 128GB", "iphone_16e"),
+        ("iphone16e 256gb", "iphone_16e"),
+        ("Продам Айфон 16e", "iphone_16e"),
+        ("iPhone Air 256GB", "iphone_air"),
+        ("Айфон Air 1TB", "iphone_air"),
+        ("iPhone 17 Pro Max 2TB", "iphone_17_pro_max"),
     ],
 )
 def test_detect_model(title, expected):
     assert detect_model(title) == expected
+
+
+def test_16e_is_not_misfiled_as_bare_16():
+    """iPhone 16e must not collapse to iphone_16 via the numeric fallback."""
+    assert detect_model("iPhone 16e") == "iphone_16e"
+    assert detect_model("iPhone 16") == "iphone_16"
 
 
 def test_pro_max_wins_over_pro_and_base():
@@ -45,10 +57,17 @@ def test_pro_max_wins_over_pro_and_base():
         ("iPhone 15 Pro 1 ТБ", "1024"),
         ("iPhone 12 64gb", "64"),
         ("iPhone 12 512", "512"),
+        ("iPhone 17 Pro Max 2TB", "2048"),
+        ("iPhone 17 Pro Max 2 ТБ", "2048"),
     ],
 )
 def test_detect_storage(text, expected):
     assert detect_storage(text) == expected
+
+
+def test_one_and_two_terabyte_are_not_confused():
+    assert detect_storage("iPhone 15 Pro 1TB") == "1024"
+    assert detect_storage("iPhone 17 Pro Max 2TB") == "2048"
 
 
 def test_detect_storage_ignores_unrelated_numbers():

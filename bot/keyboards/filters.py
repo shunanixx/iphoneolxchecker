@@ -46,7 +46,7 @@ def storages_keyboard(i18n: Translator, selected: set[str]) -> InlineKeyboardMar
             text=f"{mark}{storage_title(storage)}",
             callback_data=filter_cb("s", storage),
         )
-    builder.adjust(3, 2)
+    builder.adjust(3, 3)
 
     footer = InlineKeyboardBuilder()
     footer.button(text=i18n("btn.any"), callback_data=filter_cb("s_any"))

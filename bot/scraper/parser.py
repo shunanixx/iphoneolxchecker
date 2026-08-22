@@ -363,11 +363,23 @@ def _olx_id_from_url(url: str) -> str | None:
 
 def parse_listing_detail(html: str, base_url: str = "https://www.olx.ua") -> ListingDetail:
     state = _extract_state(html)
+    detail = None
     if state:
-        detail = _detail_from_state(state, base_url)
-        if detail and (detail.description or detail.photos):
-            return detail
-    return _detail_from_dom(html, base_url)
+        candidate = _detail_from_state(state, base_url)
+        if candidate and (candidate.description or candidate.photos):
+            detail = candidate
+
+    if detail is None:
+        detail = _detail_from_dom(html, base_url)
+
+    # The embedded JSON state never carries the seller's profile URL —
+    # OLX encodes it as a short opaque slug (e.g. `/uk/list/user/1VqEek/`)
+    # that has no relation to the numeric `user.id` in the state, so it
+    # can only be read from the actual page markup.
+    if not detail.seller_profile_url:
+        detail.seller_profile_url = _seller_profile_url_from_dom(html, base_url)
+
+    return detail
 
 
 def _find_ad_object(node: Any, depth: int = 0) -> dict[str, Any] | None:
@@ -399,14 +411,14 @@ def _detail_from_state(state: dict[str, Any], base_url: str) -> ListingDetail | 
         # OLX stores the description with HTML line breaks.
         description = BeautifulSoup(description, "lxml").get_text("\n", strip=True)
 
+    # The state's `user` object carries no URL/slug field at all (just
+    # `id`, `uuid`, `name`, ...) — the profile URL is picked up separately
+    # from the page markup by `parse_listing_detail`, since neither the
+    # numeric id nor the uuid maps onto OLX's short profile-URL slug.
     seller_name = None
-    seller_url = None
     user = ad.get("user") or ad.get("seller") or {}
     if isinstance(user, dict):
         seller_name = user.get("name")
-        seller_url = user.get("otherAdsUrl") or user.get("url") or user.get("profileUrl")
-        if not seller_url and user.get("id"):
-            seller_url = f"{base_url.rstrip('/')}/uk/list/user/{user['id']}/"
 
     params: dict[str, str] = {}
     for param in ad.get("params") or []:
@@ -423,7 +435,7 @@ def _detail_from_state(state: dict[str, Any], base_url: str) -> ListingDetail | 
         description=description,
         photos=_photos_from_ad(ad),
         seller_name=seller_name,
-        seller_profile_url=seller_url,
+        seller_profile_url=None,
         params=params,
     )
 
@@ -442,14 +454,9 @@ def _detail_from_dom(html: str, base_url: str) -> ListingDetail:
 
     seller_node = soup.select_one('[data-cy="seller_card"]')
     seller_name = None
-    seller_url = None
     if seller_node:
         name_node = seller_node.select_one("h4, h3, a")
         seller_name = name_node.get_text(strip=True) if name_node else None
-        link = seller_node.find("a", href=True)
-        if link:
-            href = link["href"]
-            seller_url = href if href.startswith("http") else f"{base_url.rstrip('/')}{href}"
 
     params: dict[str, str] = {}
     for chip in soup.select('[data-testid="ad-parameters-container"] p, ul.css-sfcl1s li'):
@@ -458,13 +465,37 @@ def _detail_from_dom(html: str, base_url: str) -> ListingDetail:
             key, _, value = text.partition(":")
             params[key.strip()] = value.strip()
 
+    # seller_profile_url is left unset here — `parse_listing_detail` fills
+    # it in via `_seller_profile_url_from_dom`, the one confirmed-correct
+    # selector, so both the state and DOM paths resolve it the same way.
     return ListingDetail(
         description=description,
         photos=photos,
         seller_name=seller_name,
-        seller_profile_url=seller_url,
+        seller_profile_url=None,
         params=params,
     )
+
+
+def _seller_profile_url_from_dom(html: str, base_url: str) -> str | None:
+    """The seller's profile URL, read straight from the page markup.
+
+    OLX encodes it as a short opaque slug (`/uk/list/user/1VqEek/`) with
+    no derivable relationship to the numeric `user.id` or `user.uuid`
+    that the embedded JSON state carries — so this is the only reliable
+    source, confirmed against a live listing page. The old code guessed
+    a URL from `user.id` and got a 404 on every single listing.
+    """
+    soup = BeautifulSoup(html, "lxml")
+    link = soup.select_one('a[data-testid="user-profile-link"]')
+    if not link:
+        return None
+
+    href = link.get("href")
+    if not href:
+        return None
+
+    return href if href.startswith("http") else f"{base_url.rstrip('/')}{href}"
 
 
 # --------------------------------------------------------------------------
@@ -488,7 +519,9 @@ def parse_seller_reviews(html: str) -> dict[str, Any]:
         if user:
             result["rating"] = user.get("rating") or user.get("score")
             result["reviews_count"] = user.get("reviewsCount") or user.get("opinionsCount")
-            result["since"] = user.get("created") or user.get("registeredSince")
+            created = user.get("created") or user.get("registeredSince")
+            parsed_created = _parse_iso(created) if isinstance(created, str) else None
+            result["since"] = parsed_created.date().isoformat() if parsed_created else created
 
     soup = BeautifulSoup(html, "lxml")
     for node in soup.select('[data-testid="user-review"], [data-cy="user-review"]')[:10]:
@@ -505,10 +538,26 @@ def parse_seller_reviews(html: str) -> dict[str, Any]:
 
 
 def _find_user_object(node: Any, depth: int = 0) -> dict[str, Any] | None:
+    """Locate the seller's own profile object on their `/list/user/...` page.
+
+    Real OLX pages never carry a rating/review-count field in this
+    object — that's on `state["userListing"]["seller"]["data"]`, whose
+    fields are `id`, `uuid`, `created`, `name`, `last_seen`, etc., with
+    no rating anywhere; the star-rating widget seen in the browser is a
+    separate client-side component (`sellerRating.chunk.js`) that loads
+    over its own request our lightweight HTTP client never makes. `rating`
+    /`reviewsCount`/`opinionsCount` are kept as an opportunistic bonus in
+    case some account type ever does embed them, but `created` (used for
+    "member since") is the actual reliable signal that this is the
+    seller object, not the ad-detail page's separate, ratingless copy.
+    """
     if depth > 8:
         return None
     if isinstance(node, dict):
-        if "name" in node and any(k in node for k in ("rating", "reviewsCount", "opinionsCount")):
+        has_signal = "created" in node or any(
+            k in node for k in ("rating", "reviewsCount", "opinionsCount")
+        )
+        if "name" in node and has_signal:
             return node
         for value in node.values():
             found = _find_user_object(value, depth + 1)

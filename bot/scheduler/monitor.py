@@ -44,6 +44,18 @@ MAX_NEW_PER_CYCLE = 40
 MAX_EDITED_PER_CYCLE = 10
 #: Pause between outgoing Telegram messages, to stay under flood limits.
 SEND_DELAY = 0.05
+#: Listings are ingested (detail fetch + seller reviews + AI analysis)
+#: this many at a time instead of one after another. Raising this number
+#: does not raise real load on either external service — OLX requests
+#: are still capped by OLXClient's own semaphore (`OLX_MAX_CONCURRENCY`)
+#: and Gemini calls are still paced by `GEMINI_RPM` — it only controls
+#: how many `_ingest` coroutines are allowed to be *waiting* on those two
+#: independent limiters at once. Gemini's own response latency (seconds,
+#: sometimes 15-25s) is the actual floor on how fast one listing can be
+#: scored, so overlapping several is what keeps a batch from taking
+#: minutes end-to-end; this can go higher than `OLX_MAX_CONCURRENCY`
+#: without being impolite to OLX.
+INGEST_CONCURRENCY = 5
 
 
 def matches_subscription(listing: Listing, sub: Subscription) -> bool:
@@ -98,6 +110,12 @@ class Monitor:
         self._analysis = analysis
         self._cycle_lock = asyncio.Lock()
         self._user_searches: set[int] = set()
+        # Guards against sending the same listing to the same user twice
+        # when the background cycle and an on-demand search (or two
+        # on-demand searches) overlap: both would otherwise pass a
+        # "already notified?" check before either finishes recording it.
+        self._notify_locks: dict[tuple[int, int], asyncio.Lock] = {}
+        self._notify_locks_guard = asyncio.Lock()
 
     # ------------------------------------------------------------------
     # background loop
@@ -200,13 +218,19 @@ class Monitor:
 
         log.info("found %s listings, %s new, %s edited", len(cards), len(fresh), len(edited))
 
-        ingested: list[int] = []
-        for card in fresh[:MAX_NEW_PER_CYCLE] + edited[:MAX_EDITED_PER_CYCLE]:
-            listing_id = await self._ingest(card, subs)
-            if listing_id is not None:
-                ingested.append(listing_id)
+        to_ingest = fresh[:MAX_NEW_PER_CYCLE] + edited[:MAX_EDITED_PER_CYCLE]
+        return await self._ingest_many(to_ingest, subs)
 
-        return ingested
+    async def _ingest_many(self, cards: list[ListingCard], subs: list[Subscription]) -> list[int]:
+        """Ingest up to `INGEST_CONCURRENCY` listings at once instead of serially."""
+        semaphore = asyncio.Semaphore(INGEST_CONCURRENCY)
+
+        async def bounded(card: ListingCard) -> int | None:
+            async with semaphore:
+                return await self._ingest(card, subs)
+
+        results = await asyncio.gather(*(bounded(card) for card in cards))
+        return [listing_id for listing_id in results if listing_id is not None]
 
     async def _ingest(self, card: ListingCard, subs: list[Subscription]) -> int | None:
         """Steps 5-9 for a single listing: detail, detect, hash, store, analyse."""
@@ -331,16 +355,59 @@ class Monitor:
                     user = await session.get(User, user_id)
                     if user is None:
                         continue
-                    if await crud.notification_exists(session, user_id, listing.id):
-                        continue
-
-                    delivered = await self._send_card(user, listing, analysis)
-                    if delivered:
-                        await crud.record_notification(session, user_id, listing.id, sub.id)
+                    if await self._notify_once(
+                        session, user, listing, analysis, sub.id, header=True
+                    ):
                         sent += 1
                     await asyncio.sleep(SEND_DELAY)
 
         return sent
+
+    async def _notify_lock_for(self, key: tuple[int, int]) -> asyncio.Lock:
+        async with self._notify_locks_guard:
+            lock = self._notify_locks.get(key)
+            if lock is None:
+                lock = asyncio.Lock()
+                self._notify_locks[key] = lock
+            return lock
+
+    async def _release_notify_lock(self, key: tuple[int, int]) -> None:
+        async with self._notify_locks_guard:
+            lock = self._notify_locks.get(key)
+            if lock is not None and not lock.locked():
+                self._notify_locks.pop(key, None)
+
+    async def _notify_once(
+        self,
+        session: AsyncSession,
+        user: User,
+        listing: Listing,
+        analysis: Any,
+        sub_id: int | None,
+        header: bool,
+    ) -> bool:
+        """Send `listing` to `user` at most once, even under concurrent callers.
+
+        The background cycle and an on-demand search reach this for the
+        same (user, listing) pair whenever they overlap in time — which
+        they routinely do (§ "🔍 Search now" runs the same pipeline
+        without waiting for the background cycle's lock). Without the
+        per-key lock here, both could pass a "not notified yet?" check
+        before either finishes recording it, and the user gets the same
+        listing twice.
+        """
+        key = (user.id, listing.id)
+        lock = await self._notify_lock_for(key)
+        async with lock:
+            try:
+                if await crud.notification_exists(session, user.id, listing.id):
+                    return False
+                delivered = await self._send_card(user, listing, analysis, header=header)
+                if delivered:
+                    await crud.record_notification(session, user.id, listing.id, sub_id)
+                return delivered
+            finally:
+                await self._release_notify_lock(key)
 
     async def _send_card(
         self, user: User, listing: Listing, analysis: Any, header: bool = True
@@ -444,15 +511,21 @@ class Monitor:
 
     async def deliver_to_user(self, user_id: int, listing_ids: list[int]) -> int:
         """Send specific listings to one user and log the notifications."""
-        sent = 0
         async with session_scope() as session:
             user = await session.get(User, user_id)
             if user is None:
                 return 0
-
             subs = [s for s in await crud.list_subscriptions(session, user_id) if s.is_active]
 
-            for listing_id in listing_ids:
+        sent = 0
+        for listing_id in listing_ids:
+            # One session per listing, committed before moving to the
+            # next — matching `_dispatch`'s granularity. A single session
+            # held open across the whole batch would leave every
+            # notification it records invisible to a concurrent background
+            # cycle until the entire batch finished, which is exactly the
+            # gap that let the same listing get sent twice.
+            async with session_scope() as session:
                 listing = await crud.get_listing(session, listing_id)
                 if listing is None:
                     continue
@@ -468,11 +541,10 @@ class Monitor:
                     reviews = await crud.get_seller_reviews(session, listing.seller_profile_url)
                 analysis = await self._analysis.get_or_create(session, listing, reviews=reviews)
 
-                if await self._send_card(user, listing, analysis, header=False):
-                    await crud.record_notification(
-                        session, user_id, listing.id, sub.id if sub else None
-                    )
+                if await self._notify_once(
+                    session, user, listing, analysis, sub.id if sub else None, header=False
+                ):
                     sent += 1
-                await asyncio.sleep(SEND_DELAY)
+            await asyncio.sleep(SEND_DELAY)
 
         return sent

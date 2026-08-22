@@ -5,6 +5,7 @@ bot are stubs — but every other layer is the real one, so this is what
 catches a break in the seam between them.
 """
 
+import asyncio
 import copy
 import json
 
@@ -14,6 +15,7 @@ from bot.ai.cache import AnalysisService
 from bot.config import Settings
 from bot.db import crud
 from bot.db.engine import session_scope
+from bot.db.models import User
 from bot.scheduler.monitor import Monitor
 from bot.scraper.olx_client import OLXClient
 
@@ -50,14 +52,23 @@ DETAIL_AD = {
     "url": "https://www.olx.ua/d/uk/obyavlenie/a-ID111.html",
     "description": "Продам iPhone 13 Pro 256 ГБ. Стан ідеальний, повний комплект.",
     "photos": [{"link": "https://cdn/1;s={width}x{height}"}, {"link": "https://cdn/2.jpg"}],
-    "user": {"name": "Іван", "otherAdsUrl": "https://www.olx.ua/uk/list/user/abc/"},
+    # `user` carries no URL field on real OLX pages — the profile link is
+    # only ever in the page markup, hence the anchor tag `_state_html`
+    # embeds below rather than anything on this dict.
+    "user": {"name": "Іван"},
     "params": [{"name": "Стан", "value": {"label": "Вживані"}}],
 }
 
 
 def _state_html(payload: dict) -> str:
     blob = json.dumps(json.dumps(payload, ensure_ascii=False))
-    return f"<html><script>window.__PRERENDERED_STATE__ = {blob};window.x=1;</script></html>"
+    # Mirrors the real markup `_seller_profile_url_from_dom` reads from —
+    # harmless on pages (like search results) that don't need it.
+    seller_link = '<a data-testid="user-profile-link" href="/uk/list/user/abc/">seller</a>'
+    return (
+        f"<html><body>{seller_link}</body>"
+        f"<script>window.__PRERENDERED_STATE__ = {blob};window.x=1;</script></html>"
+    )
 
 
 class FakeFetcher:
@@ -105,7 +116,8 @@ class FakeAI:
         self.calls += 1
         return (
             {
-                "score": 9,
+                "phone_score": 9,
+                "seller_score": 8,
                 "short_verdict": "Ціна нижча за ринок, продавець надійний",
                 "price_assessment": "Вигідна",
                 "condition_assessment": "Ідеальний стан",
@@ -158,7 +170,8 @@ async def test_full_cycle_delivers_one_matching_listing(db, pipeline):
 
     message = bot.sent[0]["text"]
     assert "iPhone 13 Pro" in message
-    assert "9/10" in message
+    assert "9/10" in message, "phone score"
+    assert "8/10" in message, "seller score"
     assert "Ціна нижча за ринок" in message
     assert bot.sent[0]["markup"] is not None
 
@@ -220,7 +233,8 @@ async def test_detection_and_analysis_are_persisted(db, pipeline):
 
         analysis = await crud.get_cached_analysis(session, listing.id, listing.content_hash)
         assert analysis is not None
-        assert analysis.score == 9
+        assert analysis.phone_score == 9
+        assert analysis.seller_score == 8
 
 
 async def test_second_cycle_sends_nothing_new(db, pipeline):
@@ -301,6 +315,50 @@ async def test_on_demand_search_uses_the_same_matching(db, pipeline):
 
     # Having been delivered, it must not come back on the next search.
     assert await monitor.search_for_user(user_id) == []
+
+
+async def test_concurrent_notify_calls_send_exactly_once(db, pipeline):
+    """The background cycle and an on-demand search can race for the same
+    (user, listing) — exactly one caller may deliver it, never zero and
+    never more than one, no matter how many hit it at the same instant.
+    """
+    monitor, bot, _, _ = pipeline
+    user_id = await _subscribe()
+
+    async with session_scope() as session:
+        listing = await crud.upsert_listing(
+            session,
+            {
+                "olx_id": "race-1",
+                "url": "https://olx.ua/x",
+                "title": "iPhone 13 Pro 256GB",
+                "price": 20000,
+                "currency": "UAH",
+                "city": "Київ",
+                "description": None,
+                "photos": [],
+                "seller_name": None,
+                "seller_profile_url": None,
+                "model": "iphone_13_pro",
+                "storage": "256",
+                "posted_at": None,
+                "content_hash": "race-hash",
+            },
+        )
+        listing_id = listing.id
+
+    async def notify() -> bool:
+        async with session_scope() as session:
+            fresh_listing = await crud.get_listing(session, listing_id)
+            fresh_user = await session.get(User, user_id)
+            return await monitor._notify_once(
+                session, fresh_user, fresh_listing, None, None, header=True
+            )
+
+    results = await asyncio.gather(*(notify() for _ in range(5)))
+
+    assert sum(results) == 1, "exactly one of the concurrent callers should have delivered it"
+    assert len(bot.sent) == 1
 
 
 async def test_edited_listing_is_re_analysed(db, pipeline, ads):

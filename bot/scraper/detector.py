@@ -23,6 +23,9 @@ Classifier = Callable[[str, str], Awaitable[tuple[str | None, str | None]]]
 
 _STORAGE_RE = re.compile(r"\b(64|128|256|512)\s*(?:gb|gib|гб|гбайт|г6)\b", re.IGNORECASE)
 _TERABYTE_RE = re.compile(r"\b1\s*(?:tb|тб|т6)\b", re.IGNORECASE)
+#: 2 TB exists only on the 17 Pro Max, but detecting it generically costs
+#: nothing and avoids a one-model special case.
+_TWO_TERABYTE_RE = re.compile(r"\b2\s*(?:tb|тб|т6)\b", re.IGNORECASE)
 
 #: Words that mean this listing is not a phone we can score.
 _ACCESSORY_MARKERS = (
@@ -89,6 +92,8 @@ def looks_like_accessory(text: str) -> bool:
 
 def detect_storage(text: str) -> str | None:
     normalized = _normalize(text)
+    if _TWO_TERABYTE_RE.search(normalized):
+        return "2048"
     if _TERABYTE_RE.search(normalized):
         return "1024"
     match = _STORAGE_RE.search(normalized)

@@ -92,7 +92,14 @@ def render_card(listing: Listing, analysis: Analysis | None, i18n: Translator) -
         lines.append(i18n("card.no_analysis"))
         return "\n".join(lines)
 
-    lines.append(f"{score_emoji(analysis.score)} " + i18n("card.score", score=analysis.score))
+    lines.append(
+        f"{score_emoji(analysis.phone_score)} "
+        + i18n("card.phone_score", score=analysis.phone_score)
+    )
+    lines.append(
+        f"{score_emoji(analysis.seller_score)} "
+        + i18n("card.seller_score", score=analysis.seller_score)
+    )
     if analysis.short_verdict:
         lines.append(i18n("card.verdict", verdict=esc(analysis.short_verdict)))
 
@@ -113,7 +120,10 @@ def render_details(listing: Listing, analysis: Analysis | None, i18n: Translator
     blocks = [
         header,
         "",
-        f"{score_emoji(analysis.score)} " + i18n("details.score", score=analysis.score),
+        f"{score_emoji(analysis.phone_score)} "
+        + i18n("details.phone_score", score=analysis.phone_score),
+        f"{score_emoji(analysis.seller_score)} "
+        + i18n("details.seller_score", score=analysis.seller_score),
     ]
 
     for key, text in (

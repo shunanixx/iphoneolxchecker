@@ -129,10 +129,11 @@ class AnalysisService:
                         own_session, listing.id, listing.content_hash, payload, raw
                     )
                 log.info(
-                    "analysed listing %s (%s) -> score %s",
+                    "analysed listing %s (%s) -> phone %s / seller %s",
                     listing.id,
                     listing.olx_id,
-                    analysis.score,
+                    analysis.phone_score,
+                    analysis.seller_score,
                 )
                 return analysis
             finally:

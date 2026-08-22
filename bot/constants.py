@@ -46,9 +46,14 @@ IPHONE_MODELS: tuple[IPhoneModel, ...] = (
     _m("iphone_15_pro_max", "iPhone 15 Pro Max", 15, "iphone 15 pro max"),
     _m("iphone_16", "iPhone 16", 16, "iphone 16", "айфон 16"),
     _m("iphone_16_plus", "iPhone 16 Plus", 16, "iphone 16 plus"),
+    _m("iphone_16e", "iPhone 16e", 16, "iphone 16e", "iphone16e", "айфон 16e", "iphone 16 e"),
     _m("iphone_16_pro", "iPhone 16 Pro", 16, "iphone 16 pro"),
     _m("iphone_16_pro_max", "iPhone 16 Pro Max", 16, "iphone 16 pro max"),
     _m("iphone_17", "iPhone 17", 17, "iphone 17", "айфон 17"),
+    # Released alongside the 17 lineup as a distinct model, not a
+    # numbered variant — "iPhone 17 Air" was the pre-launch name some
+    # sellers still use, so it's included as an alias.
+    _m("iphone_air", "iPhone Air", 17, "iphone air", "айфон air", "iphone 17 air"),
     _m("iphone_17_pro", "iPhone 17 Pro", 17, "iphone 17 pro"),
     _m("iphone_17_pro_max", "iPhone 17 Pro Max", 17, "iphone 17 pro max"),
 )
@@ -58,7 +63,9 @@ MODELS_BY_KEY: dict[str, IPhoneModel] = {m.key: m for m in IPHONE_MODELS}
 GENERATIONS: tuple[int, ...] = tuple(sorted({m.generation for m in IPHONE_MODELS}))
 
 #: Storage tiers, as strings — they are stored in JSON columns.
-STORAGES: tuple[str, ...] = ("64", "128", "256", "512", "1024")
+#: 2048 (2 TB) exists only on the iPhone 17 Pro Max, the first tier ever
+#: to offer it, but it's cheap to support generically rather than special-case one model.
+STORAGES: tuple[str, ...] = ("64", "128", "256", "512", "1024", "2048")
 
 STORAGE_TITLES: dict[str, str] = {
     "64": "64 GB",
@@ -66,6 +73,7 @@ STORAGE_TITLES: dict[str, str] = {
     "256": "256 GB",
     "512": "512 GB",
     "1024": "1 TB",
+    "2048": "2 TB",
 }
 
 

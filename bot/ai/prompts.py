@@ -16,13 +16,32 @@ around the text, not the text itself.
 
 from typing import Any
 
+from bot.constants import MODELS_BY_KEY, STORAGES
+
 #: Fields the model must return. Mirrors the `analyses` table.
+#:
+#: `phone_score` and `seller_score` are deliberately separate — the
+#: device/price side of the deal and the seller's trustworthiness are
+#: independent questions, and blending them into one number hid which
+#: one was actually the problem (e.g. a great phone from a sketchy
+#: seller, or the reverse, both used to collapse to the same "6/10").
 ANALYSIS_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
-        "score": {
+        "phone_score": {
             "type": "integer",
-            "description": "Overall attractiveness of the deal, 1 (avoid) to 10 (excellent).",
+            "description": (
+                "Deal quality for the device itself — price vs. market, condition, "
+                "completeness — 1 (avoid) to 10 (excellent). Independent of the seller."
+            ),
+        },
+        "seller_score": {
+            "type": "integer",
+            "description": (
+                "Seller trustworthiness — reviews, rating, account age, listing "
+                "quality, scam red flags — 1 (avoid) to 10 (excellent). Independent "
+                "of the device itself."
+            ),
         },
         "short_verdict": {
             "type": "string",
@@ -47,7 +66,8 @@ ANALYSIS_SCHEMA: dict[str, Any] = {
         },
     },
     "required": [
-        "score",
+        "phone_score",
+        "seller_score",
         "short_verdict",
         "price_assessment",
         "condition_assessment",
@@ -65,15 +85,47 @@ SYSTEM_INSTRUCTION = """\
 - Будь конкретним і стриманим: без маркетингових формулювань і без паніки.
 - Оцінюй лише те, що видно в тексті, на фото та у відгуках. Не вигадуй
   фактів, яких немає в даних.
-- Якщо даних бракує (немає фото, немає відгуків, порожній опис) — це сам
-  по собі сигнал: зазнач це у відповідному полі та врахуй у балі.
+- Якщо даних бракує (немає фото, порожній опис) — це сам по собі сигнал:
+  зазнач це у відповідному полі та врахуй у балі.
 
-Шкала score:
-- 9-10: чудова пропозиція, ціна нижча за ринок, продавець надійний.
-- 7-8: хороша пропозиція, дрібні зауваження.
+ВАЖЛИВО про рейтинг і відгуки продавця: рейтинг та кількість відгуків
+технічно недоступні для БУДЬ-ЯКОГО продавця на цій платформі — не через
+те, що в конкретного продавця їх немає, а тому, що ці дані завантажує
+окремий віджет, якого наш інструмент не бачить. Тому позначка
+"рейтинг/відгуки: недоступні" стосується взагалі ВСІХ оголошень
+однаково і сама по собі НЕ Є сигналом ненадійності — не пиши "новий
+акаунт без відгуків" чи подібне лише на основі цієї відсутності даних.
+Про надійність продавця роби висновок на основі:
+- реальної дати реєстрації на OLX (якщо вказана — це надійний сигнал);
+- поведінки в самому оголошенні (вимога передоплати, ухилення від
+  зустрічі, підозрілі формулювання);
+- будь-яких текстів відгуків, якщо вони все ж таки надані нижче.
+Якщо жодного з цих сигналів немає — чесно напиши, що даних для оцінки
+продавця замало, а не вигадуй висновок про "новий" чи "підозрілий"
+акаунт.
+
+Оцінюй телефон і продавця ОКРЕМО — це два різних питання, і "хороший
+телефон від сумнівного продавця" чи навпаки не повинні зливатись в одне
+розмите число.
+
+Шкала phone_score (ціна/стан/комплектність пристрою):
+- 9-10: чудова пропозиція, ціна нижча за ринок, стан і опис відмінні.
+- 7-8: хороша пропозиція, дрібні зауваження щодо ціни або стану.
 - 5-6: середня, є питання щодо ціни або стану.
-- 3-4: сумнівна, кілька тривожних сигналів.
-- 1-2: висока ймовірність шахрайства або дуже погана ціна.
+- 3-4: сумнівна пропозиція, ціна завищена або стан викликає сумніви.
+- 1-2: дуже погана пропозиція (явно завищена ціна, ознаки підміни/несправності).
+
+Шкала seller_score (надійність продавця; рейтинг/відгуки НЕ використовуй
+як підставу — вони недоступні завжди й для всіх, див. вище):
+- 9-10: тривала історія на OLX (роки), у самому оголошенні немає жодних
+  тривожних сигналів.
+- 7-8: помірна історія на OLX, поведінка в оголошенні виглядає нормально.
+- 5-6: даних для впевненого висновку недостатньо (типовий випадок —
+  чесно признач цю оцінку, а не вигадуй причину для нижчої).
+- 3-4: акаунт справді новий (за реальною датою реєстрації, якщо вона
+  відома) АБО є конкретні тривожні сигнали з поведінки в оголошенні.
+- 1-2: явні ознаки шахрайства в самому оголошенні (не просто відсутність
+  рейтингу).
 
 Типові ризики, на які варто звертати увагу:
 - ціна значно нижча за ринкову (класична приманка шахраїв);
@@ -81,7 +133,8 @@ SYSTEM_INSTRUCTION = """\
 - стокові фото або фото з інтернету замість реального пристрою;
 - згадки про заміну екрана/батареї, Face ID, "не оригінал", "не працює";
 - Neverlock/R-SIM, iCloud-lock, "чистий iCloud" без підтвердження;
-- новий акаунт продавця без відгуків або з негативними відгуками.
+- акаунт, зареєстрований на OLX за реальною датою нещодавно (не плутати
+  з відсутністю рейтингу — це різні речі, див. вище).
 """
 
 _LISTING_TEMPLATE = """\
@@ -118,24 +171,37 @@ def _fmt_price(price: int | None, currency: str | None) -> str:
 
 def _fmt_reviews(reviews: dict[str, Any] | None) -> str:
     if not reviews:
-        return "Відгуки: даних немає."
+        return (
+            "Дані про продавця не завантажені. Це не означає, що продавець "
+            "новий чи підозрілий — просто немає інформації для аналізу."
+        )
 
     lines: list[str] = []
     rating = reviews.get("rating")
     count = reviews.get("reviews_count")
     since = reviews.get("since")
 
-    lines.append(f"Рейтинг: {rating if rating is not None else 'немає'}")
-    lines.append(f"Кількість відгуків: {count if count is not None else 'немає'}")
+    # Rating/review-count are unavailable for every seller on this
+    # platform, by construction (a separate widget our scraper never
+    # sees loads them) — phrased so the model can't mistake "we didn't
+    # get this" for "this seller confirmed has none".
+    if rating is not None:
+        lines.append(f"Рейтинг: {rating}")
+    if count is not None:
+        lines.append(f"Кількість відгуків: {count}")
+    if rating is None and count is None:
+        lines.append(
+            "Рейтинг і кількість відгуків: недоступні технічно (стосується "
+            "всіх продавців на платформі однаково — НЕ використовуй це як "
+            "ознаку ненадійності)."
+        )
     if since:
-        lines.append(f"На OLX з: {since}")
+        lines.append(f"На OLX з: {since} (реальна дата реєстрації — надійний сигнал)")
 
     texts = reviews.get("reviews") or []
     if texts:
-        lines.append("Останні відгуки:")
+        lines.append("Тексти відгуків, знайдені на сторінці:")
         lines.extend(f"- {text}" for text in texts[:8])
-    else:
-        lines.append("Текстів відгуків немає.")
 
     return "\n".join(lines)
 
@@ -207,24 +273,31 @@ CLASSIFY_SCHEMA: dict[str, Any] = {
         },
         "storage": {
             "type": "string",
-            "description": "One of 64, 128, 256, 512, 1024, or empty string if unclear.",
+            "description": "One of 64, 128, 256, 512, 1024, 2048, or empty string if unclear.",
         },
     },
     "required": ["model", "storage"],
 }
 
-CLASSIFY_PROMPT = """\
+#: Built from the live catalogue rather than hardcoded, so a model added
+#: to `constants.py` (e.g. iphone_16e, iphone_air — neither fits the
+#: generic iphone_<gen>[_suffix] pattern) is something the AI fallback
+#: can actually name, not just something the regex detector knows about.
+_MODEL_KEY_LIST = ", ".join(MODELS_BY_KEY)
+_STORAGE_LIST = ", ".join(STORAGES)
+
+CLASSIFY_PROMPT = f"""\
 Визнач модель iPhone та обсяг пам'яті з тексту оголошення.
 
 Поверни:
-- model: один з ключів у форматі iphone_<покоління>[_pro|_pro_max|_plus|_mini],
-  наприклад iphone_13, iphone_14_pro_max, iphone_15_plus.
-  Підтримуються покоління 11-17. Якщо визначити неможливо — порожній рядок.
-- storage: одне зі значень 64, 128, 256, 512, 1024 (1024 = 1 ТБ).
+- model: ОДИН з цих ключів (більше жодних інших значень не існує):
+  {_MODEL_KEY_LIST}
+  Якщо жоден не підходить або дані неоднозначні — порожній рядок.
+- storage: одне зі значень {_STORAGE_LIST} (1024 = 1 ТБ, 2048 = 2 ТБ).
   Якщо визначити неможливо — порожній рядок.
 
 Не вгадуй. Порожній рядок кращий за неправильну відповідь.
 
-Заголовок: {title}
-Опис: {description}
+Заголовок: {{title}}
+Опис: {{description}}
 """

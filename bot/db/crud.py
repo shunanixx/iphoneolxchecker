@@ -221,7 +221,8 @@ async def save_analysis(
     values = {
         "listing_id": listing_id,
         "content_hash": content_hash,
-        "score": int(payload.get("score", 0)),
+        "phone_score": int(payload.get("phone_score", 0)),
+        "seller_score": int(payload.get("seller_score", 0)),
         "short_verdict": payload.get("short_verdict", ""),
         "price_assessment": payload.get("price_assessment"),
         "condition_assessment": payload.get("condition_assessment"),

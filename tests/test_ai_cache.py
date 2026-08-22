@@ -16,7 +16,8 @@ class FakeAI:
         self.calls = 0
         self.fail = fail
         self.payload = payload or {
-            "score": 8,
+            "phone_score": 8,
+            "seller_score": 7,
             "short_verdict": "Хороша пропозиція",
             "price_assessment": "Ціна нижча за ринок",
             "condition_assessment": "Стан добрий",
@@ -70,7 +71,8 @@ async def test_first_call_hits_the_api_and_is_stored(db):
 
     assert ai_client.calls == 1
     assert analysis is not None
-    assert analysis.score == 8
+    assert analysis.phone_score == 8
+    assert analysis.seller_score == 7
 
 
 async def test_second_call_is_served_from_cache(db):
@@ -177,14 +179,25 @@ async def test_images_are_capped_and_failures_tolerated(db):
     assert len(images) == 2  # the failed download is simply absent
 
 
-def test_normalize_clamps_a_wild_score():
-    result = normalize_analysis({"score": 42, "short_verdict": "x", "risk_flags": "one flag"})
-    assert result["score"] == 10
+def test_normalize_clamps_wild_scores():
+    result = normalize_analysis(
+        {"phone_score": 42, "seller_score": -5, "short_verdict": "x", "risk_flags": "one flag"}
+    )
+    assert result["phone_score"] == 10
+    assert result["seller_score"] == 1
     assert result["risk_flags"] == ["one flag"]
+
+
+def test_normalize_scores_independently():
+    """A great phone from a sketchy seller must not collapse into one number."""
+    result = normalize_analysis({"phone_score": 9, "seller_score": 2})
+    assert result["phone_score"] == 9
+    assert result["seller_score"] == 2
 
 
 def test_normalize_survives_a_malformed_response():
     result = normalize_analysis({})
-    assert result["score"] == 0
+    assert result["phone_score"] == 0
+    assert result["seller_score"] == 0
     assert result["short_verdict"] == ""
     assert result["risk_flags"] == []
